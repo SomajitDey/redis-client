@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+# Brief: Create and keepalive N connections to Redis and bind each connection to a Unix socket
+# Usage: ./redis-connection-pool [options] 
+# Options:
+#   -n <number of connections> | -T <thread no.>
+#   -b <socket base directory>
+#   -h <host>
+#   -p <port>
+#   -a <passwd>
+#   -t <idle timeout s>
+#   -d <database no.>
+# Redis non-error responses are served over the socket; error streams are logged in an stderr file.
+# Use a connection from this pool: echo <Redis command> | nc -U socket_${num} | handler 3<stderr_${num}
+
+. "${BASH_SOURCE%/*}/redis.bash"
+
+  while getopts ':h:p:a:t:d:b:T:n:' opt;do
+    case "${opt}" in
+      h) REDIS_HOST="${OPTARG}";;
+      p) REDIS_PORT="${OPTARG}";;
+      a) REDIS_AUTH="${OPTARG}";;
+      t) REDIS_TIMEOUT="${OPTARG}";;
+      d) REDIS_DB="${OPTARG}";;
+      b) base="${OPTARG}";;
+      n) num_conn="${OPTARG}";;
+      *) echo "Usage: ${0} -h <host> -p <port> -a <passwd> -t <idle timeout s> -d <database no.> -n <no. of connections> -b <dir path>" >&2; return 1;;
+    esac
+  done
+  base="${base:-.}"
+  num_conn="${num_conn:-1}"
+
+thread(){
+  local num="${1:-0}"
+  local socket="${base}/redis-socket-${num}"
+  local stderr="${base}/redis-stderr-${num}"
+  local pipe="${base}/.redis-pipe-${num}"
+  local log="${base}/redis-log-${num}"
+  mkfifo "${pipe}" 2>/dev/null
+  rm -f "${socket}"
+  touch "${stderr}"
+
+  ( trap "redis_disconnect; rm -f ${socket} ${stderr} ${pipe}" exit
+
+  flock -n 2 || { echo "Failed to acquire thread lock" >&2 ; exit 23;}
+  redis_connect || exit "$?"
+
+  trap 'exit' TERM QUIT INT HUP
+  echo "${BASHPID}"
+
+  while :; do
+    { 
+      read -r cmd || continue
+      [[ "${cmd^^}" = @(QUIT|EXIT|Q) ]] && exit
+      redis_exec "${cmd}" 2> "${stderr}"
+      local exitcode=$?
+      ((exitcode != 0)) && ((exitcode != 1)) && cat "${stderr}" >&2 && exit "${exitcode}"
+    } < <(nc -U -l "${socket}" < "${pipe}") > "${pipe}"
+  done
+  ) 2> "${log}"
+}
+
+for i in $(seq "${num_conn}"); do
+  thread "${i}" &
+done
