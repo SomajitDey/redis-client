@@ -3,7 +3,7 @@
 # Brief: Create and keepalive N connections to Redis and bind each connection to a Unix socket
 # Usage: ./redis-connection-pool [options] 
 # Options:
-#   -n <number of connections> | -T <thread no.>
+#   -n <number of connections>
 #   -b <socket base directory>
 #   -h <host>
 #   -p <port>
@@ -11,11 +11,14 @@
 #   -t <idle timeout s>
 #   -d <database no.>
 # Redis non-error responses are served over the socket; error streams are logged in an stderr file.
-# Use a connection from this pool: echo <Redis command> | nc -U socket_${num} | handler 3<stderr_${num}
+# Use a connection from this pool:
+# exec 3< redis-stderr-${id} # Open stderr  
+# echo <Redis command> | nc -U redis-socket-${num} # Socket I/O
+# read redis-stderr-${id} # Read error message, if any
 
 . "${BASH_SOURCE%/*}/redis.bash"
 
-  while getopts ':h:p:a:t:d:b:T:n:' opt;do
+  while getopts ':h:p:a:t:d:b:n:' opt;do
     case "${opt}" in
       h) REDIS_HOST="${OPTARG}";;
       p) REDIS_PORT="${OPTARG}";;
@@ -28,38 +31,47 @@
     esac
   done
   base="${base:-.}"
+  mkdir -p "${base}"
   num_conn="${num_conn:-1}"
 
 thread(){
-  local num="${1:-0}"
-  local socket="${base}/redis-socket-${num}"
-  local stderr="${base}/redis-stderr-${num}"
-  local pipe="${base}/.redis-pipe-${num}"
-  local log="${base}/redis-log-${num}"
+  local id="${1:-0}"
+  local socket="${base}/redis-socket-${id}"
+  local stderr="${base}/redis-stderr-${id}"
+  local pipe="${base}/.redis-pipe-${id}"
+  local log="${base}/redis-log-${id}"
   mkfifo "${pipe}" 2>/dev/null
   rm -f "${socket}"
-  touch "${stderr}"
 
   ( trap "redis_disconnect; rm -f ${socket} ${stderr} ${pipe}" exit
 
   flock -n 2 || { echo "Failed to acquire thread lock" >&2 ; exit 23;}
   redis_connect || exit "$?"
 
-  trap 'exit' TERM QUIT INT HUP
-  echo "${BASHPID}"
+  trap '' HUP
+  trap 'exit' TERM QUIT INT
+  echo "${BASHPID}" >&2
 
   while :; do
-    { 
-      read -r cmd || continue
+    {
+    touch "${stderr}"
+    if read -r cmd; then
       [[ "${cmd^^}" = @(QUIT|EXIT|Q) ]] && exit
-      redis_exec "${cmd}" 2> "${stderr}"
-      local exitcode=$?
-      ((exitcode != 0)) && ((exitcode != 1)) && cat "${stderr}" >&2 && exit "${exitcode}"
+    else
+      continue
+    fi
+
+    redis_exec "${cmd}" 2>"${stderr}"
+    local exitcode=$?
+    case "${exitcode}" in
+     0|1) rm -f "${stderr}" "${socket}" ;;
+     *) cat "${stderr}" >>"${log}" ; exit "${exitcode}" ;;
+    esac
     } < <(nc -U -l "${socket}" < "${pipe}") > "${pipe}"
   done
-  ) 2> "${log}"
+  ) 2> "${log}" &
 }
 
 for i in $(seq "${num_conn}"); do
-  thread "${i}" &
+  thread "${i}"
 done
