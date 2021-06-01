@@ -12,9 +12,12 @@
 #   -d <database no.>
 # Redis non-error responses are served over the socket; error streams are logged in an stderr file.
 # Use a connection from this pool:
-# exec 3< redis-stderr-${id} # Open stderr  
-# echo <Redis command> | nc -U redis-socket-${num} # Socket I/O
-# read redis-stderr-${id} # Read error message, if any
+#   exec 3< redis-stderr-${id} # Open stderr
+#   echo <Redis command> | nc -U redis-socket-${id} # Socket I/O
+#   read -u 3 error # Read error message, if any
+# Bugs:
+# - If connection to server is lost and reconnection is established, nc -U redis-socket-${id} hangs
+# - Connecting to a redis-socket with nc -U -N or nc -U -q 1 makes the corresponding thread quit
 
 . "${BASH_SOURCE%/*}/redis.bash"
 

@@ -206,7 +206,7 @@ redis_disconnect(){
   # Usage: redis_disconnect
   # Exit-code: 0
 
-  [[ -n "${REDIS_KA}" ]] && kill -KILL "${REDIS_KA}" ; unset REDIS_KA # Kill keepalive proc in bg
+  [[ -n "${REDIS_KA}" ]] && pkill -KILL -P "${REDIS_KA}" ; unset REDIS_KA # Kill keepalive proc in bg
   trap - ALRM # Reset trap
   if [[ -n "${REDIS_FD}" ]]; then
     eval "exec ${REDIS_FD}<&-"
