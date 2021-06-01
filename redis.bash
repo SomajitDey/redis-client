@@ -172,7 +172,7 @@ redis_connect(){
 
   eval "exec ${REDIS_FD}<>/dev/tcp/${REDIS_HOST}/${REDIS_PORT}" || return 22
 
-  declare -xg REDIS_LOCK="$(mktemp -u /tmp/redis_$$_XXXXX.lock)" # Unlock 1. Note the -u. This is not unsafe as $$ is there.
+  declare -xg REDIS_LOCK="$(mktemp -u /tmp/redis_${BASHPID}_XXXXX.lock)" # Unlock 1. Note the -u. This is not unsafe as ${BASHPID} is there.
 
   if [[ -n "${REDIS_AUTH}" ]]; then
     redis_exec "AUTH ${REDIS_AUTH}" || { redis_disconnect; return 20;}
@@ -185,7 +185,7 @@ redis_connect(){
   # Setup keepalive
   if ((REDIS_TIMEOUT > 0));then
     trap "redis_keepalive" ALRM
-    kill -ALRM $$
+    kill -ALRM ${BASHPID}
   fi
 }; export -f redis_connect
 
@@ -197,7 +197,7 @@ redis_keepalive(){
   redis_exec 'PING'
   case "$?" in
     20|21|22) return 1;;
-    *) (sleep "${REDIS_TIMEOUT}" && kill -ALRM $$)& declare -xg REDIS_KA=${!};;
+    *) (sleep "${REDIS_TIMEOUT}" && kill -ALRM ${BASHPID})& declare -xg REDIS_KA=${!};;
   esac
 } &>/dev/null; export -f redis_keepalive
 
