@@ -72,6 +72,10 @@ Also put your name and email id in the comments section of your code-block.
 
 If you cannot submit a pull-request at [GitHub](https://github.com/SomajitDey/redis-client) feel free to send me your patch over [email](mailto:dey.somajit@gmail.com). Just mention the Git commit hash in the [project repository](https://github.com/SomajitDey/redis-client) to which the patch should be applied.
 
+# Acknowledgements
+
+TY: @[zuiderkwast](https://github.com/zuiderkwast)
+
 # License
 
 GNU Lesser General Public License - 2.1

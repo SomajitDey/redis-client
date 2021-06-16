@@ -39,18 +39,23 @@ redis_read(){
   # Readings are faithful, i.e. backslashes are not escaped.
 
   # RESP data-types abbr:
-  # simple-string=sstr; error=err; integer=int; bulk-string=bstr; arr=arr; null-bulk-stringor array=null
+  # simple-string=sstr; error=err; integer=int; bulk-string=bstr; array=arr; null-bulk-string or array=null
 
   # REDIS_TYPE and REDIS_REPLY:
   # These are always Bash array variables for simplicity. For any data-type except arr, their lengths are <=1.
   # Note that the simple command: `variable="${REDIS_REPLY}"` actually sets `variable` with `${REDIS_REPLY[0]}`
   # For arr data-types, REDIS_TYPE and REDIS_REPLY are filled with the type and value of the corresponding elements in arr.
   # For example: Reading *2\r\n:1\r\n+OK\r\n  would set REDIS_TYPE=(int sstr) and REDIS_REPLY=(1 OK)
+  # Nested arrays are saved as is:
+  # Example: Reading *2\r\n:5\r\n*3\r\n$2\r\nhi\r\n:1\r\n+its tough\r\n would set REDIS_TYPE=(int arr) and
+  # REDIS_REPLY=(5 '*3\r\n$2\r\nhi\r\n:1\r\n+its tough\r\n'). You can reparse the 2nd element later.
 
   local -x OPTIND=1
-  while getopts t: option;do
+  local parse_array=true
+  while getopts t:n option;do
     case "${option}" in
       t) local tmout="-t ${OPTARG}";;
+      n) parse_array=false;;
     esac
   done
   
@@ -58,7 +63,7 @@ redis_read(){
   eval unset "${name}"[@] REDIS_TYPE[@] # eval makes sure $name is expanded before shell runs the command
   eval declare -gxa "${name}" REDIS_TYPE # Making it array (-a) to avoid 'variable not array' errors for prefix='*' later
   
-  local prefix
+  local prefix suffix # Prefix is the first character of a complete RESP string, suffix is the rest part
   read -r -n1 ${tmout} prefix || return 1
   case "${prefix}" in
     '+')
@@ -70,44 +75,59 @@ redis_read(){
     ':')
         REDIS_TYPE="int"
         ;;     
-    '$')
-        REDIS_TYPE="bstr"
-        ;;
   esac
   
-  read_simplest(){
-    read -r -d $'\r\n' "${name}" && read # Last read takes out the \n from \r\n
-  }
-  
-  read_simplest
-  
+  local buffer
+  IFS= read -r -d $'\r\n' buffer && read # Last read takes out the \n from \r\n
+  suffix="${buffer}"$'\r\n'
+    
   case "${prefix}" in
     '$')
-        local nbytes="${!name}" # From the last read_simplest
+        local nbytes="${buffer}" && buffer=
         if ((nbytes!=-1));then
-          read -r -d $'\r\n' -N "${nbytes}" "${name}" && read
+          REDIS_TYPE="bstr"
+          IFS= read -r -d $'\r\n' -N "${nbytes}" buffer && read
+          suffix="${suffix}${buffer}"$'\r\n'
         else
           REDIS_TYPE=
-          eval "${name}="
+          buffer=
         fi
         ;;
     '*')
-        local nelements="${!name}" # From the last read_simplest
+        local nelements="${buffer}" && buffer=
         if ((nelements!=-1));then
+          local i
           for i in $(seq "${nelements}");do
             local index="$((i-1))"
-            redis_read
+            redis_read -n
             local proxy_type[index]="${REDIS_TYPE}"
-            local proxy_reply[index]="${REDIS_REPLY}"
+            case "${REDIS_TYPE}" in
+              arr)local proxy_reply[index]="'${REDIS_REPLY}'";; # Without the single quotes, any ${proxy_reply[@]} later would be messed
+              *) local proxy_reply[index]="'${REDIS_BUFFER}'";;
+            esac
+            suffix="${suffix}${REDIS_REPLY}"
           done
-          REDIS_TYPE=(${proxy_type[@]})
-          eval "${name}=(${proxy_reply[@]})"
+          
+          if ${parse_array}; then
+            REDIS_TYPE=(${proxy_type[@]})
+            eval "${name}=(${proxy_reply[@]})"
+            return
+          else
+            REDIS_TYPE="arr"
+          fi
         else
           REDIS_TYPE=
-          eval "${name}="
+          buffer=
         fi
         ;;
-  esac  
+  esac
+
+  if ${parse_array}; then
+    eval "${name}='${buffer}'"
+  else
+    eval "${name}='${prefix}${suffix}'"
+    REDIS_BUFFER="${buffer}"
+  fi
 }; export -f redis_read
 
 redis_rep(){
@@ -120,21 +140,34 @@ redis_rep(){
   # 1 - successful read and data-type: Err
   # 22 - unsuccessful read; server disconnected
   
-  redis_read -t 1 || return 22
-  local array_size="${#REDIS_TYPE[@]}"
-  if ((array_size<=1)); then
-    case "${REDIS_TYPE}" in
-      err) echo "${REDIS_REPLY}" >&2; return 1;;
-      int | bstr) echo "${REDIS_REPLY}";;
-      '') echo -e NuLL\\a;;
-      sstr) [[ "${REDIS_REPLY}" =~ ^(OK|PONG)$ ]] || echo "${REDIS_REPLY}";;
-    esac
-  else
-    for i in "${array_size}"; do
-      [[ -z "${REDIS_TYPE[array_size-1]}" ]] && REDIS_REPLY[array_size-1]=NuLL$'\a'
-    done
-    echo "${REDIS_REPLY[@]}"
-  fi
+  unset type reply
+  local -a type reply
+  redis_read -t 1 reply || return 22
+  type=(${REDIS_TYPE[@]})
+  local array_size="${#type[@]}"
+  if ((array_size>1));then local is_array=true; else local is_array=false;fi
+  ((array_size==0))&& array_size=1 # i.e. null array
+  local separator="${separator} "
+  local i
+  for i in $(seq 0 $((array_size-1))); do
+    if [[ "${type[i]}" == arr ]]; then
+      echo -n "${separator}"
+      echo -n "${reply[i]}" | redis_rep
+    else
+      ${is_array} && [[ -t 1 ]] && \
+      if ((i!=0)); then 
+        echo -n "${separator}-"
+      else
+        echo -n "${separatar:0:-1}--"
+      fi >/dev/tty
+      case "${type[i]}" in
+        err) echo "${reply[i]}" >&2; return 1;;
+        int | bstr) echo "${reply[i]}";;
+        sstr) [[ "${reply[i]}" =~ ^(OK|PONG)$ ]] || echo "${reply[i]}";;
+        '') echo -e NuLL\\a;;
+      esac
+    fi
+  done
 }; export -f redis_rep
 
 redis_connect(){
