@@ -60,7 +60,7 @@ redis_read(){
   done
   
   local name="${!OPTIND:-REDIS_REPLY}"
-  eval unset "${name}"[@] REDIS_TYPE[@] # eval makes sure $name is expanded before shell runs the command
+  eval unset "${name}" REDIS_TYPE # eval makes sure $name is expanded before shell runs the command
   eval declare -gxa "${name}" REDIS_TYPE # Making it array (-a) to avoid 'variable not array' errors for prefix='*' later
   
   local prefix suffix # Prefix is the first character of a complete RESP string, suffix is the rest part
@@ -140,19 +140,16 @@ redis_rep(){
   # 1 - successful read and data-type: Err
   # 22 - unsuccessful read; server disconnected
   
-  unset type reply
-  local -a type reply
-  redis_read -t 1 reply || return 22
-  type=(${REDIS_TYPE[@]})
-  local array_size="${#type[@]}"
+  redis_read -t 1 || return 22
+  local array_size="${#REDIS_TYPE[@]}"
   if ((array_size>1));then local is_array=true; else local is_array=false;fi
   ((array_size==0))&& array_size=1 # i.e. null array
   local separator="${separator} "
   local i
   for i in $(seq 0 $((array_size-1))); do
-    if [[ "${type[i]}" == arr ]]; then
-      echo -n "${separator}"
-      echo -n "${reply[i]}" | redis_rep
+    if [[ "${REDIS_TYPE[i]}" == arr ]]; then
+      [[ -t 1 ]] && echo -n "${separator}" >/dev/tty
+      echo -n "${REDIS_REPLY[i]}" | redis_rep
     else
       ${is_array} && [[ -t 1 ]] && \
       if ((i!=0)); then 
@@ -160,10 +157,11 @@ redis_rep(){
       else
         echo -n "${separatar:0:-1}--"
       fi >/dev/tty
-      case "${type[i]}" in
-        err) echo "${reply[i]}" >&2; return 1;;
-        int | bstr) echo "${reply[i]}";;
-        sstr) [[ "${reply[i]}" =~ ^(OK|PONG)$ ]] || echo "${reply[i]}";;
+      case "${REDIS_TYPE[i]}" in
+        err) echo "${REDIS_REPLY[i]}" >&2; return 1;;
+        int) [[ -t 1 ]] && echo -n '(int) ' >/dev/tty; echo "${REDIS_REPLY[i]}";;
+        bstr) echo "${REDIS_REPLY[i]}";;
+        sstr) [[ "${REDIS_REPLY[i]}" =~ ^(OK|PONG)$ ]] || echo "${REDIS_REPLY[i]}";;
         '') echo -e NuLL\\a;;
       esac
     fi
