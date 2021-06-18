@@ -132,8 +132,8 @@ redis_read(){
 
 redis_rep(){
   # Brief: REP - Read-Evaluate-Print.
-  # Read one complete RESP response from stdin, evaluate data-type & print non-trivial responses.
-  # OK and PONG are not printed as these are trivial. Null bulk-string is printed as NuLL$'\a'. Err printed at stderr.
+  # Read one complete RESP response from stdin, evaluate data-type(s) & print the value(s). Pretty print if stdout is terminal.
+  # OK and PONG are printed only if stdout is attached to the terminal. Null bulk-string is printed as NuLL$'\a'. Err printed at stderr.
   # Usage: redis_rep
   # Exit-code:
   # 0 - successful read and data-type other than Err
@@ -149,7 +149,7 @@ redis_rep(){
   for i in $(seq 0 $((array_size-1))); do
     if [[ "${REDIS_TYPE[i]}" == arr ]]; then
       [[ -t 1 ]] && echo -n "${separator}" >/dev/tty
-      echo -n "${REDIS_REPLY[i]}" | redis_rep
+      echo -n "${REDIS_REPLY[i]}" | redis_rep # Recursive call to parse nested arrays
     else
       ${is_array} && [[ -t 1 ]] && \
       if ((i!=0)); then 
@@ -161,7 +161,7 @@ redis_rep(){
         err) echo "${REDIS_REPLY[i]}" >&2; return 1;;
         int) [[ -t 1 ]] && echo -n '(int) ' >/dev/tty; echo "${REDIS_REPLY[i]}";;
         bstr) echo "${REDIS_REPLY[i]}";;
-        sstr) [[ "${REDIS_REPLY[i]}" =~ ^(OK|PONG)$ ]] || echo "${REDIS_REPLY[i]}";;
+        sstr) [[ "${REDIS_REPLY[i]}" =~ ^(OK|PONG)$ ]] && ! [[ -t 1 ]] || echo "${REDIS_REPLY[i]}";;
         '') echo -e NuLL\\a;;
       esac
     fi
@@ -225,7 +225,7 @@ redis_keepalive(){
   # Usage: redis_keepalive
   # Exit-code: Either 0 (when success) or 1 (on failure).
 
-  redis_exec 'PING'
+  redis_exec 'PING' >/dev/null # Stdout disconnected from terminal so that PONG doesn't get printed by redis_rep
   case "$?" in
     20|21|22) return 1;;
     *) (sleep "${REDIS_TIMEOUT}" && kill -ALRM ${BASHPID})& declare -xg REDIS_KA=${!};;
@@ -263,6 +263,7 @@ redis_exec(){
   # 23 : Failed to acquire lock.
   
   local cmd="${@}"
+  [[ -n "${cmd}" ]] || return 0
 
   if [[ -n "${REDIS_LOCK}" ]]; then # Check Lock 1 : Set or unset
     trap 'rm -f ${REDIS_LOCK}' return # Unlock 2 trap. Note that ${REDIS_LOCK} needs to be expanded when handler is executed
