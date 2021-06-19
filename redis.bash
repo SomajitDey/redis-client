@@ -52,16 +52,19 @@ redis_read(){
 
   local -x OPTIND=1
   local parse_array=true
-  while getopts t:n option;do
+  local tmout=
+  local option
+  while getopts :t:n option;do
     case "${option}" in
       t) local tmout="-t ${OPTARG}";;
       n) parse_array=false;;
+      *) echo "Usage: redis_read [-t <timeout for each read>]" >&2; return;;
     esac
   done
   
-  local name="${!OPTIND:-REDIS_REPLY}"
-  eval unset "${name}" REDIS_TYPE # eval makes sure $name is expanded before shell runs the command
-  eval declare -gxa "${name}" REDIS_TYPE # Making it array (-a) to avoid 'variable not array' errors for prefix='*' later
+  local -n name="${!OPTIND:-REDIS_REPLY}" # Note the nameref -n
+  unset name REDIS_TYPE # Cleanup: destroy previous arrays
+  declare -gxa name REDIS_TYPE # Redefine as arrays for the generic case, i.e. RESP array type
   
   local prefix suffix # Prefix is the first character of a complete RESP string, suffix is the rest part
   read -r -n1 ${tmout} prefix || return 1
@@ -89,7 +92,7 @@ redis_read(){
           IFS= read -r -d $'\r\n' -N "${nbytes}" buffer && read
           suffix="${suffix}${buffer}"$'\r\n'
         else
-          REDIS_TYPE=
+          REDIS_TYPE="null"
           buffer=
         fi
         ;;
@@ -102,30 +105,30 @@ redis_read(){
             redis_read -n
             local proxy_type[index]="${REDIS_TYPE}"
             case "${REDIS_TYPE}" in
-              arr)local proxy_reply[index]="'${REDIS_REPLY}'";; # Without the single quotes, any ${proxy_reply[@]} later would be messed
-              *) local proxy_reply[index]="'${REDIS_BUFFER}'";;
+              arr)local proxy_reply[index]="${REDIS_REPLY}";;
+              *) local proxy_reply[index]="${REDIS_BUFFER}";;
             esac
             suffix="${suffix}${REDIS_REPLY}"
           done
           
           if ${parse_array}; then
-            REDIS_TYPE=(${proxy_type[@]})
-            eval "${name}=(${proxy_reply[@]})"
+            REDIS_TYPE=("${proxy_type[@]}")
+            name=("${proxy_reply[@]}")
             return
           else
             REDIS_TYPE="arr"
           fi
         else
-          REDIS_TYPE=
+          REDIS_TYPE="null"
           buffer=
         fi
         ;;
   esac
 
   if ${parse_array}; then
-    eval "${name}='${buffer}'"
+    name="${buffer}"
   else
-    eval "${name}='${prefix}${suffix}'"
+    name="${prefix}${suffix}"
     REDIS_BUFFER="${buffer}"
   fi
 }; export -f redis_read
@@ -140,31 +143,53 @@ redis_rep(){
   # 1 - successful read and data-type: Err
   # 22 - unsuccessful read; server disconnected
   
-  redis_read -t 1 || return 22
+  local -x OPTIND=1
+  local tmout=
+  local ntimes=1
+  local recursive=false
+  local option
+  while getopts :t:n:r option;do
+    case "${option}" in
+      t) tmout="-t ${OPTARG}";;
+      n) ntimes="${OPTARG}";;
+      r) recursive=true;;
+      *) echo "Usage: redis_rep [-t <timeout for each read>] [-n <no. of RESP responses to be read>; 0 for inifinity]">&2; return;;
+    esac
+  done
+  
+  while :;do
+
+  redis_read ${tmout} || return 22
   local array_size="${#REDIS_TYPE[@]}"
   if ((array_size>1));then local is_array=true; else local is_array=false;fi
-  ((array_size==0))&& array_size=1 # i.e. null array
-  local separator="${separator} "
+  if ${recursive}; then 
+    local indentation="${indentation} "
+  else
+    local indentation=" "
+  fi
   local i
   for i in $(seq 0 $((array_size-1))); do
     if [[ "${REDIS_TYPE[i]}" == arr ]]; then
-      [[ -t 1 ]] && echo -n "${separator}" >/dev/tty
-      echo -n "${REDIS_REPLY[i]}" | redis_rep # Recursive call to parse nested arrays
+      echo -n "${REDIS_REPLY[i]}" | redis_rep -r # Recursive call to parse nested arrays
     else
       ${is_array} && [[ -t 1 ]] && \
       if ((i!=0)); then 
-        echo -n "${separator}-"
+        echo -n "${indentation}-"
       else
-        echo -n "${separatar:0:-1}--"
+        echo -n "${indentation:0:-1}--"
       fi >/dev/tty
       case "${REDIS_TYPE[i]}" in
         err) echo "${REDIS_REPLY[i]}" >&2; return 1;;
         int) [[ -t 1 ]] && echo -n '(int) ' >/dev/tty; echo "${REDIS_REPLY[i]}";;
         bstr) echo "${REDIS_REPLY[i]}";;
         sstr) [[ "${REDIS_REPLY[i]}" =~ ^(OK|PONG)$ ]] && ! [[ -t 1 ]] || echo "${REDIS_REPLY[i]}";;
-        '') echo -e NuLL\\a;;
+        null) echo -e NuLL\\a;;
       esac
     fi
+  done
+  
+  ((ntimes--))
+  ((ntimes==0)) && break
   done
 }; export -f redis_rep
 
@@ -249,8 +274,8 @@ redis_disconnect(){
 } &>/dev/null; export -f redis_disconnect
 
 redis_exec(){
-  # Brief: Execute REDIS command passed as parameters and print non-trivial server response, if any.
-  #   OK and PONG are not printed. Null bulk-string is printed as NuLL$'\a'. Err printed at stderr.
+  # Brief: Execute REDIS command passed as parameter and print server response. Pretty print output for terminal sessions.
+  # OK and PONG are printed only if stdout is attached to the terminal. Null bulk-string is printed as NuLL$'\a'. Err printed at stderr.
   # Usage: redis_exec <command>
   # Example:
   #  redis_exec GET key
@@ -279,7 +304,7 @@ redis_exec(){
   if [[ -n "${REDIS_FD}" ]] && [[ -e /dev/fd/"${REDIS_FD}" ]]; then
     while redis_read -t 0.001; do :;done <& "${REDIS_FD}" # Discard response if any from a previous command
     echo -n "${cmd}"$'\r\n' >& "${REDIS_FD}" || exit 22 # Inline command: note trailing CRLF
-    redis_rep <& "${REDIS_FD}"
+    redis_rep -t 1 <& "${REDIS_FD}"
   else
 #    echo "No TCP connection to the REDIS server - ${REDIS_HOST}:${REDIS_PORT}" >&2
     exit 22

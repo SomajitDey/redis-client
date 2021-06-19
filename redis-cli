@@ -13,7 +13,7 @@ redis_connect "${@}" || exit 1
 history -c # Clear Bash history
 
 while :;do
-  read -e -p "${REDIS_HOST}:${REDIS_PORT}_${REDIS_DB:-0}$ " || break
+  read -re -p "${REDIS_HOST}:${REDIS_PORT}_${REDIS_DB:-0}$ " || break
   [[ "${REPLY^^}" = @(QUIT|EXIT|Q) ]] && break
 
   redis_exec "${REPLY}"

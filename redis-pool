@@ -1,80 +1,66 @@
 #!/usr/bin/env bash
 
-# Brief: Create and keepalive N connections to Redis and bind each connection to a Unix socket
+# Brief: Create and keepalive N connections to Redis and bind them to a Unix socket
 # Usage: ./redis-connection-pool [options] 
 # Options:
 #   -n <number of connections>
-#   -b <socket base directory>
 #   -h <host>
 #   -p <port>
 #   -a <passwd>
 #   -t <idle timeout s>
 #   -d <database no.>
-# Redis non-error responses are served over the socket; error streams are logged in an stderr file.
+# RESP responses are served over the socket; you still need to parse them with redis_read or redis_rep from redis.bash. 
+# The socket just acts as a portal to the Redis-server.
 # Use a connection from this pool:
-#   exec 3< redis-stderr-${id} # Open stderr
-#   echo <Redis command> | nc -U redis-socket-${id} # Socket I/O
-#   read -u 3 error # Read error message, if any
-# Bugs:
-# - If connection to server is lost and reconnection is established, nc -U redis-socket-${id} hangs
-# - Connecting to a redis-socket with nc -U -N or nc -U -q 1 makes the corresponding thread quit
+#   echo <Redis command> | nc -U -N redis-socket-file-path | redis_rep # Socket I/O
 
 . "${BASH_SOURCE%/*}/redis.bash"
 
-  while getopts ':h:p:a:t:d:b:n:' opt;do
-    case "${opt}" in
-      h) REDIS_HOST="${OPTARG}";;
-      p) REDIS_PORT="${OPTARG}";;
-      a) REDIS_AUTH="${OPTARG}";;
-      t) REDIS_TIMEOUT="${OPTARG}";;
-      d) REDIS_DB="${OPTARG}";;
-      b) base="${OPTARG}";;
-      n) num_conn="${OPTARG}";;
-      *) echo "Usage: ${0} -h <host> -p <port> -a <passwd> -t <idle timeout s> -d <database no.> -n <no. of connections> -b <dir path>" >&2; return 1;;
-    esac
-  done
-  base="${base:-.}"
-  mkdir -p "${base}"
-  num_conn="${num_conn:-1}"
+while getopts ':h:p:a:t:d:n:' opt;do
+  case "${opt}" in
+    h) REDIS_HOST="${OPTARG}";;
+    p) REDIS_PORT="${OPTARG}";;
+    a) REDIS_AUTH="${OPTARG}";;
+    t) REDIS_TIMEOUT="${OPTARG}";;
+    d) REDIS_DB="${OPTARG}";;
+    n) num_conn="${OPTARG}";;
+    *) echo "Usage: ${0} [-h <host>] [-p <port>] [-a <passwd>] [-t <idle timeout s>] [-d <database no.>] [-n <no. of connections>] <socket's file-path or localhost port number>" >&2; exit;;
+  esac
+done
+socket="${!OPTIND}"
+[[ "${socket}" ]] || { echo "Pass a Unix-socket file-path or localhost TCP port number as parameter. For more help, use: ${0} -h" >&2; exit;}
+if [[ "${socket}" =~ ^[0-9]*$ ]]; then
+  unix_sock=false
+  socketaddr="TCP4-LISTEN:${socket}"
+else
+  unix_sock=true
+  socketaddr="UNIX-LISTEN:${socket}"
+fi
+num_conn="${num_conn:-1}"
 
-thread(){
-  local id="${1:-0}"
-  local socket="${base}/redis-socket-${id}"
-  local stderr="${base}/redis-stderr-${id}"
-  local pipe="${base}/.redis-pipe-${id}"
-  local log="${base}/redis-log-${id}"
-  mkfifo "${pipe}" 2>/dev/null
-  rm -f "${socket}"
-
-  ( trap "redis_disconnect; rm -f ${socket} ${stderr} ${pipe}" exit
-
-  flock -n 2 || { echo "Failed to acquire thread lock" >&2 ; exit 23;}
-  redis_connect || exit "$?"
-
+single_conn(){
+  local usock="${1}"
+  trap "redis_disconnect; rm -f ${usock}" return
   trap '' HUP
-  trap 'exit' TERM QUIT INT
-  echo "${BASHPID}" >&2
-
+  trap 'return' TERM QUIT INT
+  redis_connect || return "$?"
   while :; do
-    {
-    touch "${stderr}"
-    if read -r cmd; then
-      [[ "${cmd^^}" = @(QUIT|EXIT|Q) ]] && exit
-    else
-      continue
-    fi
-
-    redis_exec "${cmd}" 2>"${stderr}"
-    local exitcode=$?
-    case "${exitcode}" in
-     0|1) rm -f "${stderr}" "${socket}" ;;
-     *) cat "${stderr}" >>"${log}" ; exit "${exitcode}" ;;
-    esac
-    } < <(nc -U -l "${socket}" < "${pipe}") > "${pipe}"
+    socat UNIX-L:"${usock}",crlf FD:"${REDIS_FD}"
   done
-  ) 2> "${log}" &
 }
 
-for i in $(seq "${num_conn}"); do
-  thread "${i}"
+trap "${unix_sock} && rm -f ${socket}; pkill -s $$" INT QUIT TERM HUP exit
+
+for i in $(seq ${num_conn}); do
+  usock="socket-${i}"
+  rm -f "${usock}"
+  single_conn "${usock}" &
 done
+
+sleep 0.1 # Giving time to single_conn in bg to create the sockets
+
+socat "${socketaddr}",reuseaddr,fork,maxchildren="${num_conn}" \
+SYSTEM:'until for s in socket-*;do nc -U ${s} && break; done; do sleep 0;done'
+# Note the until loop above. It makes sure every request is fed to the server even if there's an initial wait
+
+exit
