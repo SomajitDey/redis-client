@@ -5,19 +5,33 @@
 
 . "${BASH_SOURCE%/*}/redis.bash"
 
-trap 'redis_disconnect' exit
-trap 'echo; exit' HUP TERM INT QUIT
+trap 'redis_disconnect; pkill -s $$' exit
+trap 'echo; exit' HUP TERM QUIT INT
 
 redis_connect "${@}" || exit 1
 
 history -c # Clear Bash history
 
-while :;do
-  read -re -p "${REDIS_HOST}:${REDIS_PORT}_${REDIS_DB:-0}$ " || break
-  [[ "${REPLY^^}" = @(QUIT|EXIT|Q) ]] && break
+while read -re -p "${REDIS_HOST}:${REDIS_PORT}_${REDIS_DB:-0}$ " cmd ;do
 
-  redis_exec "${REPLY}"
-  (($?==22)) && exit 22
+  [[ "${cmd^^}" == @(QUIT|EXIT|Q) ]] && break # ^^ implies all uppercase; @(pattern-list) matches one of the given patterns
 
-  history -s "${REPLY}" # Append latest command to Bash history
+  history -s "${cmd}" # Append latest command to Bash history
+
+  redis_exec "${cmd}" || ((${?} != 22)) || exit 22
+  
+  if [[ "${cmd,,}" =~ ^([p]?subscribe|monitor).*$ ]]; then
+    # Push protocol activated
+    redis_rep -n 0 <& ${REDIS_FD} &
+
+    trap 'redis_exec reset && echo "Press Enter">/dev/tty && break' INT # breaks from nested loop below & continues with main loop
+    
+    # Reading for allowed commands [Ref: https://redis.io/commands/subscribe]
+    while read -re cmd;do
+      [[ -n "${cmd}" ]] && printf "%s\r\n" "${cmd}"
+    done >& ${REDIS_FD}
+    trap 'echo;exit' INT # Override last trap reset
+  fi
 done
+
+exit

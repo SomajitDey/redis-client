@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# Brief: Create and keepalive N connections to Redis and bind them to a Unix socket
-# Usage: ./redis-connection-pool [options] 
+# Brief: Create and keepalive N connections to Redis and bind them to a Unix domain or TCP socket
+# Usage: ./redis-pool [options] <TCP-port-number | path-to-Unix-socket>
 # Options:
 #   -n <number of connections>
 #   -h <host>
@@ -9,10 +9,11 @@
 #   -a <passwd>
 #   -t <idle timeout s>
 #   -d <database no.>
-# RESP responses are served over the socket; you still need to parse them with redis_read or redis_rep from redis.bash. 
-# The socket just acts as a portal to the Redis-server.
-# Use a connection from this pool:
-#   echo <Redis command> | nc -U -N redis-socket-file-path | redis_rep # Socket I/O
+# The given local socket simply serves as a proxy for the remote Redis server; i.e. RESP responses are served over the socket;
+# The user still needs to parse the responses with `redis_read` or `redis_rep` from the `redis.bash` library.
+# The socket transforms trailing LF to CRLF so user doesn't need to worry about that.
+# Example: Pipelining 2 commands
+#   echo -e "command 1\nCommand 2" | nc -N localhost <port number> | redis_rep -n2
 
 . "${BASH_SOURCE%/*}/redis.bash"
 
