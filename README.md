@@ -90,6 +90,8 @@ Following are simple examples using Unix domain sockets. For using TCP ports ins
 
 https://redis.io/clients#bash
 
+https://github.com/caquino/redis-bash
+
 # Feedback, feature requests, bug report
 
 Create an issue at the [project repository](https://github.com/SomajitDey/redis-client) or [write to me](mailto:dey.somajit@gmail.com). 

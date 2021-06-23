@@ -302,9 +302,10 @@ redis_exec(){
   flock -n 9 || { echo "Failed to acquire lock 3" >&2; exit 23;} # Check Lock 3 : Atomically locked or not
 
   if [[ -n "${REDIS_FD}" ]] && [[ -e /dev/fd/"${REDIS_FD}" ]]; then
+    trap 'exit 22' PIPE
     while redis_read -t 0.001; do :;done <& "${REDIS_FD}" # Discard response if any from a previous command
     echo -n "${cmd}"$'\r\n' >& "${REDIS_FD}" || exit 22 # Inline command: note trailing CRLF
-    redis_rep -t 1 <& "${REDIS_FD}"
+    redis_rep -t 1 <& "${REDIS_FD}" || exit 22
   else
 #    echo "No TCP connection to the REDIS server - ${REDIS_HOST}:${REDIS_PORT}" >&2
     exit 22

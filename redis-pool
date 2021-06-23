@@ -46,9 +46,10 @@ single_conn(){
   trap 'return' TERM QUIT INT
   redis_connect || return "$?"
   while :; do
-    socat UNIX-L:"${usock}",crlf FD:"${REDIS_FD}"
+    redis_exec 'PING' >/dev/null || redis_connect || continue # Tests connection to remote Redis server, reconnects if necessary
+    socat -W "${REDIS_LOCK}" UNIX-L:"${usock}",crlf FD:"${REDIS_FD}"
   done
-}
+} &>/dev/null
 
 trap "${unix_sock} && rm -f ${socket}; pkill -s $$" INT QUIT TERM HUP exit
 
@@ -60,8 +61,9 @@ done
 
 sleep 0.1 # Giving time to single_conn in bg to create the sockets
 
-socat "${socketaddr}",reuseaddr,fork,maxchildren="${num_conn}" \
-SYSTEM:'until for s in socket-*;do nc -U ${s} && break; done; do sleep 0;done'
-# Note the until loop above. It makes sure every request is fed to the server even if there's an initial wait
+socat "${socketaddr}",reuseaddr,fork \
+SYSTEM:'until for s in socket-*;do nc -U ${s} && break; done; do sleep 0;done' &>/dev/null
+
+# Note the `until` loop above. It makes sure every request is fed to the server even if there is an initial wait
 
 exit
