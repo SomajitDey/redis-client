@@ -111,6 +111,10 @@ If you cannot submit a PR at [GitHub](https://github.com/SomajitDey/redis-client
 
 **Open issue:** Making the docs better.
 
+# Support / Sponsor
+
+[![Sponsor](https://www.buymeacoffee.com/assets/img/custom_images/yellow_img.png)](https://buymeacoffee.com/SomajitDey)
+
 # Acknowledgements
 
 TY: @[zuiderkwast](https://github.com/zuiderkwast)
