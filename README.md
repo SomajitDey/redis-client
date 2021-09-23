@@ -1,10 +1,28 @@
 # Redis Client (Bash)
 
+[![Featured](https://img.shields.io/badge/Featured%20in-redis.io%2Fclients-yellogreen)](https://redis.io/clients#bash) 
+
 This project consists of 
 
 1. `redis.bash` - a Bash library for [Redis](https://redis.io/) containing some useful shell-functions
 2. `redis-cli` - an executable Bash script implementing an interactive Redis console
 3. `redis-pool` - a [connection pool](https://en.wikipedia.org/wiki/Connection_pool) for Redis
+
+## Table of Contents  
+[![tocgen](https://img.shields.io/badge/Generated%20using-tocgen-blue)](https://github.com/SomajitDey/tocgen)  
+  - [Redis Client (Bash)](#redis-client-bash)  
+  - [Library usage](#library-usage)  
+      - [Low level tasks](#low-level-tasks)  
+      - [Demo / Example](#demo--example)  
+  - [CLI console](#cli-console)  
+  - [Connection pool](#connection-pool)  
+  - [Alternative(s)](#alternatives)  
+  - [Feedback, feature requests, bug report](#feedback-feature-requests-bug-report)  
+  - [Contribution](#contribution)  
+  - [Support / Sponsor](#support--sponsor)  
+  - [Acknowledgements](#acknowledgements)  
+  - [License](#license)  
+#####   
 
 # Library usage
 
