@@ -1,6 +1,6 @@
 # Redis Client (Bash)
 
-[![Featured](https://img.shields.io/badge/Featured%20in-redis.io%2Fclients-yellogreen)](https://redis.io/clients#bash) 
+[![Featured](https://img.shields.io/badge/Featured%20in-redis.io-yellogreen)](https://web.archive.org/web/20240401013920/https://redis.io/resources/clients/#bash) 
 
 This project consists of 
 
